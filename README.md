@@ -36,8 +36,15 @@
 ### Example Parser String:
 
 An example of a valid parser string following these rules is:
-```
-(and=(owe.not.gte.788999, age.gt.18), or=(age.gt.18, name.eq.james))
+```Typescript
+// Example usage
+const parser = new Parser();
+const response = parser.generateQuery(
+    '(and=(owe.gte.788999,user.owe.not.gte.788999,age.gt.18,mapped.isTrue))',
+);
+
+// create the query
+console.log('Query: ', response);
 ```
 
 This parser can parse and generate queries based on input strings adhering to the above rules.
