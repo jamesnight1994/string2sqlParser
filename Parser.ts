@@ -3,34 +3,9 @@ interface ParsedObject {
     operator: string;
     value: string | null;
 }
-export default class Parser {
-    getOperator(key: string): string | null {
-        const data = [
-            { key: 'eq', value: '=' },
-            { key: 'gt', value: '>' },
-            { key: 'ls', value: '<' },
-            { key: 'gte', value: '>=' },
-            { key: 'lte', value: '<=' },
-            { key: 'not.eq', value: '!=' },
-            { key: 'not.gt', value: '!>' },
-            { key: 'not.ls', value: '!<' },
-            { key: 'not.gte', value: '!>=' },
-            { key: 'not.lte', value: '!<=' },
-            { key: 'isTrue', value: 'IS TRUE' },
-            { key: 'isFalse', value: 'IS FALSE' },
-        ];
-
-        for (const item of data) {
-            if (item.key === key) {
-                return item.value;
-            }
-        }
-
-        return null; // Return null if the key is not found
-    }
-
+export class Parser {
     /**
-     *  example input  "(and=(owe.not.gte.788999,age.gt.18),or=(age.gt.18,name.eq.james))"
+     *  example input  "(and=(owe.not||gte||788999,age||gt||18),or=(age||gt||18,name||eq||james))"
      *  */
     getLogicalOperators(input: string): object[] {
         // Remove the outermost parentheses
@@ -59,101 +34,72 @@ export default class Parser {
     }
 
     /**
-     * Input example  ['age.gt.18','users.age.gt.18',  'users.owe.not.gte.788999','owe.not.gte.788999']
+     * Input example  ['age||gt||18','users.age||gt||18', 'users.owe.not.gte.788999', 'owe.not.gte.788999']
      *
      *
      */
     getComparisonOperators(input: string[]): ParsedObject[] {
         const parsedObjects: ParsedObject[] = [];
-
         for (const str of input) {
-            const parts = str.split('.');
+            const parts = str.split('||');
             if (parts.length === 2) {
-                // if (column.directComparison)
+                // isNull, isTrue
                 const [column, operator] = parts;
                 parsedObjects.push({ column, operator, value: null });
-            } else if (parts.length === 3) {
-                // if parts of the condition are (column.condition.value)
+            } else {
+                //(column||operator||value)
                 const [column, operator, value] = parts;
                 parsedObjects.push({ column, operator, value });
-            } else if (parts.length === 4) {
-                // if parts of the condition are either (column.not.condition.value) or (table.column.condition.value)
-                const [column, notOperator, comparison, value] = parts;
-                const operator = `${notOperator}.${comparison}`;
-
-                // Check if the operator is valid
-                if (!this.getOperator(operator)) {
-                    // cases of (table.column.condition.value)
-                    const [table, column, operator, value] = parts;
-                    parsedObjects.push({
-                        column: `${table}.${column}`,
-                        operator,
-                        value,
-                    });
-                } else {
-                    // cases of (column.not.condition.value)
-                    parsedObjects.push({ column, operator, value });
-                }
-            } else if (parts.length === 5) {
-                // if parts of the condition are either (table.column.not.condition.value)
-                const [table, column, notOperator, operator, value] = parts;
-                parsedObjects.push({
-                    column: `${table}.${column}`,
-                    operator: `${notOperator}.${operator}`,
-                    value,
-                });
             }
         }
         return parsedObjects;
     }
 
-    generateQuery(inputString: string) {
-        // const inputString = "(and=(owe.not.gte.788999,age.gt.18),or=(age.gt.18,name.eq.james))";
-        const parser = new Parser();
-        // get AND and OR operators
-        const operators: object[] = parser.getLogicalOperators(inputString);
+    generateQuery(
+        inputString: string,
+        condition = 'WHERE ',
+        settings = {
+            caseSensitive: false,
+        },
+    ) {
+        const operators: object[] = this.getLogicalOperators(inputString);
         console.log('Operators: ', operators);
 
-        // query
-        const conditions: string[] = ['WHERE '];
+        const conditions: string[] = [condition];
 
         // for each operator get conditions
         operators.forEach((obj: any, index) => {
             const operator = Object.keys(obj)[0];
 
             if (operator == 'and') {
-                const comparisonOperators = parser.getComparisonOperators(
+                const comparisonOperators = this.getComparisonOperators(
                     obj.and,
                 );
                 const andConditionsQuery = this.getConditionsQuery(
                     operator,
                     comparisonOperators,
+                    settings.caseSensitive,
                 );
 
                 // if there is an next 'and' or 'or' condition
                 if (operators[index + 1] != undefined) {
-                    conditions.push(
-                        ` ${andConditionsQuery} ${operator.toUpperCase()} `,
-                    );
+                    conditions.push(` ${andConditionsQuery} AND `);
                 } else {
                     conditions.push(andConditionsQuery);
                 }
             } else if (operator == 'or') {
-                const comparisonOperators = parser.getComparisonOperators(
-                    obj.or,
-                );
+                const comparisonOperators = this.getComparisonOperators(obj.or);
                 const orConditionsQuery = this.getConditionsQuery(
                     operator,
                     comparisonOperators,
+                    settings.caseSensitive,
                 );
 
                 // if there is an next 'and' or 'or' condition
                 if (operators[index + 1] != undefined) {
-                    conditions.push(
-                        ` ${orConditionsQuery} ${operator.toUpperCase()} `,
-                    );
+                    conditions.push(` ( ${orConditionsQuery} ) AND `);
                 } else {
-                    conditions.push(orConditionsQuery);
+                    conditions.push(` ( ${orConditionsQuery} ) `);
                 }
             } else {
                 throw Error(`Unknown join operator ${operator}`);
@@ -165,33 +111,59 @@ export default class Parser {
     getConditionsQuery(
         operator: string,
         comparisonOperators: ParsedObject[],
+        caseSensitive: boolean,
     ): string {
         const conditionsQuery: string[] = [];
         comparisonOperators.forEach((comparisonOperator) => {
             const comparison = this.translateOperator(
                 comparisonOperator.operator,
             );
-            const condition = `${comparisonOperator.column} ${comparison} ${
-                comparisonOperator.value ?? ''
-            }`;
+            let column = comparisonOperator.column;
+            let value = comparisonOperator.value;
+
+            // if case sensitive is true and is string and is not a timestamp or date
+            if (
+                !caseSensitive &&
+                typeof value == 'string' &&
+                !this.isDateOrTimeStamp(value)
+            ) {
+                column = `LOWER (${comparisonOperator.column})`;
+                value = `LOWER (${comparisonOperator.value})`;
+            }
+
+            const condition = `${column} ${comparison} ${value ?? ''}`;
             conditionsQuery.push(condition);
         });
         return conditionsQuery.join(` ${operator.toLocaleUpperCase()} `);
     }
+
+    isDateOrTimeStamp(value: string): boolean {
+        const date = new Date(value);
+
+        if (isNaN(date.getTime()) || date.toString() === 'Invalid Date') {
+            return false;
+        }
+
+        return true;
+    }
+
     translateOperator(key: string) {
         const data = [
             { key: 'eq', value: '=' },
             { key: 'gt', value: '>' },
-            { key: 'ls', value: '<' },
+            { key: 'lt', value: '<' },
             { key: 'gte', value: '>=' },
             { key: 'lte', value: '<=' },
-            { key: 'not.eq', value: '!=' },
-            { key: 'not.gt', value: '!>' },
-            { key: 'not.ls', value: '!<' },
-            { key: 'not.gte', value: '!>=' },
-            { key: 'not.lte', value: '!<=' },
+            { key: 'notEq', value: '!=' },
+            { key: 'notGt', value: '!>' },
+            { key: 'notLs', value: '!<' },
+            { key: 'notGte', value: '!>=' },
+            { key: 'notLte', value: '!<=' },
             { key: 'isTrue', value: 'IS TRUE' },
             { key: 'isFalse', value: 'IS FALSE' },
+            { key: 'isNull', value: 'IS NULL' },
+            { key: 'notNull', value: 'IS NOT NULL' },
+            { key: 'cont', value: 'LIKE' },
         ];
 
         for (const item of data) {
@@ -203,3 +175,10 @@ export default class Parser {
         return null; // Return null if the key is not found
     }
 }
+
+export default new Parser();
+
+//  Example usage
+// const parser = new Parser().generateQuery(
+//     `(and=(date||gte||'2023-05-01',insurance_provider.name||eq||'Corporate Insurance'),or=(name||notEq||'Motor Comprehensive for Optin',insurance_provider.name||eq||'Corporate Insurance',insurance_provider.name||cont||'%Corporate%'))`,
+// );
